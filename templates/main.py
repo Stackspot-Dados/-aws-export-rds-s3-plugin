@@ -1,15 +1,8 @@
-import logging 
-from src.utils import utils 
-from src import s3_client 
-from src import rds_client
-import json 
 from datetime import datetime
+import logging 
+import json 
 import boto3
 import botocore
-from datetime import datetime
-from botocore.config import Config
-from src import sns_client
-from src.utils.utils import get_environment_variable
 import os
 
 logger = logging.getLogger()
@@ -18,8 +11,8 @@ logger.setLevel(logging.INFO)
 
 def lambda_handler(event, context):
     logger.info(event)
-    SUFIXO_SNAPSHOT = utils.get_environment_variable('SUFIXO_SNAPSHOT')
-    DBS_SNAPSHOTS = utils.get_environment_variable('DBS_SNAPSHOTS')
+    SUFIXO_SNAPSHOT = get_environment_variable('SUFIXO_SNAPSHOT')
+    DBS_SNAPSHOTS = get_environment_variable('DBS_SNAPSHOTS')
     DBS_SNAPSHOTS = DBS_SNAPSHOTS.split(";")
     DBS_SNAPSHOTS = list(
         map(
@@ -27,11 +20,10 @@ def lambda_handler(event, context):
         )
     )
 
-    ROOT_BUCKET_DBS_SNAPSHOTS = utils.get_environment_variable(
+    ROOT_BUCKET_DBS_SNAPSHOTS = get_environment_variable(
         'ROOT_BUCKET_DBS_SNAPSHOTS'
         )
-    IAM_ROLE_S3_ARN = utils.get_environment_variable('IAM_ROLE_S3_ARN')
-    KMS_KEY_ID_ARN = utils.get_environment_variable('KMS_KEY_ID_ARN')
+    IAM_ROLE_S3_ARN = get_environment_variable('IAM_ROLE_S3_ARN')
 
 
     list_snapshot = iterator_snapshot(event)
@@ -47,19 +39,18 @@ def lambda_handler(event, context):
                 detail['SourceIdentifier']
             )
 
-            s3_client.create_object_s3(
+            create_object_s3(
                 bucket_export_snapshot,
-                s3_client.get_objects_bucket(ROOT_BUCKET_DBS_SNAPSHOTS),
+                get_objects_bucket(ROOT_BUCKET_DBS_SNAPSHOTS),
                 ROOT_BUCKET_DBS_SNAPSHOTS
             )
 
-            rds_client.export_snapshot_s3(
+            export_snapshot_s3(
                 detail['SourceIdentifier'],
                 detail['SourceArn'],
                 ROOT_BUCKET_DBS_SNAPSHOTS,
                 bucket_export_snapshot,
-                IAM_ROLE_S3_ARN,
-                KMS_KEY_ID_ARN
+                IAM_ROLE_S3_ARN
             )
 
             message = _message_return(
@@ -99,7 +90,7 @@ def iterator_snapshot(event):
     return [event]
 
 def get_bucket_db_snapshot(snapshot_db_identifier): 
-    BUCKETS_DBS_SNAPSHOTS = utils.get_environment_variable('BUCKETS_DBS_SNAPSHOTS') 
+    BUCKETS_DBS_SNAPSHOTS = get_environment_variable('BUCKETS_DBS_SNAPSHOTS') 
     
     try: 
         logger.info(
@@ -126,15 +117,7 @@ def get_bucket_db_snapshot(snapshot_db_identifier):
             Snapshot: {} | Bucket: ?".format(snapshot_db_identifier))
 
 
-rds = boto3.client(
-    'rds', 
-    region_name='sa-east-1', 
-    config=Config( 
-        s3={ 
-            "use_accelerate_endpoint": True,
-             "addressing_style": "virtual" 
-             })
-)
+rds = boto3.client('rds')
 now = datetime.now()
 
 def export_snapshot_s3( 
@@ -142,8 +125,8 @@ def export_snapshot_s3(
     snapshot_db_arn, 
     root_diretory, 
     bucket_export_snapshot, 
-    i_am_role_s3_arn, 
-    kms_key_id_arn): 
+    i_am_role_s3_arn
+    ): 
     
     try: 
         logger.info(
@@ -154,7 +137,6 @@ def export_snapshot_s3(
             )
         )
 
-        export_only = []
         id_snapshot = snapshot_db_identifier + '-' + now.strftime("%d%m%Y")
             
         export_status = rds.start_export_task( 
@@ -162,9 +144,7 @@ def export_snapshot_s3(
             SourceArn=snapshot_db_arn, 
             S3BucketName=root_diretory, 
             S3Prefix=bucket_export_snapshot[:-1], 
-            IamRoleArn=i_am_role_s3_arn, 
-            KmsKeyId=kms_key_id_arn, 
-            ExportOnly=export_only 
+            IamRoleArn=i_am_role_s3_arn,
             )
 
     
@@ -181,7 +161,6 @@ def export_snapshot_s3(
             } 
     except botocore.exceptions.ClientError as error:
         if (error.response['Error']['Code'] == 'ExportTaskLimitReachedFault'):
-            sending_sns(snapshot_db_arn, snapshot_db_identifier) 
             logger.error(error) 
     except Exception as e:
          logger.error(e) 
@@ -189,22 +168,6 @@ def export_snapshot_s3(
              Snapshot: {} | Bucket: {}" .format( snapshot_db_identifier, root_diretory + '/' + bucket_export_snapshot 
             ) 
         )
-def sending_sns(snapshot_db_arn, snapshot_db_identifier): 
-    topic_arn = get_environment_variable('SNS_TOPIC_ARN') 
-    message = { "detail": {
-        "SourceArn": snapshot_db_arn, 
-        "SourceIdentifier": snapshot_db_identifier
-        } 
-    }
-    
-    sns_client.publish_sns_message(
-        topic_arn=topic_arn, 
-        message=message, 
-        subject=f"Limite de exportações simultâneos atingido | Snapshot identifier: {snapshot_db_identifier}"
-         # noqa: E501 
-    )
-
-    s3 = boto3.client('s3', region_name='sa-east-1')
 
 
 def create_object_s3(
@@ -276,32 +239,6 @@ def get_objects_bucket(bucket):
             Bucket: {}".format(bucket)
         )
 
-        sns = boto3.client('sns', region_name='sa-east-1')
-
-
-def publish_sns_message(
-    topic_arn,
-    message,
-    subject
-):
-
-    logger.info("Publising message on {}".format(topic_arn))
-
-    response = sns.publish(
-        TopicArn=topic_arn,
-        Message=json.dumps(message),
-        Subject=subject,
-        MessageAttributes={
-            'EVENT_ORIGIN': {
-                'DataType': 'String',
-                'StringValue': 'LAMBDA_EXPORT'
-            }
-        }
-    )
-
-    logger.info(f"Message request.\n Response({response})")
-
-    return response
 
 def get_environment_variable(environment_variable_name):
     logger.setLevel(logging.INFO)
@@ -311,10 +248,6 @@ def get_environment_variable(environment_variable_name):
             .format(environment_variable_name)
         )
         environment_variable_value = os.environ[environment_variable_name]
-        # logger.info(
-        #     "INFO: {}: {}"
-        #     .format(environment_variable_name, environment_variable_value)
-        # )
         return environment_variable_value
     except Exception as e:
         logger.error(e)

@@ -1,5 +1,5 @@
 resource "aws_iam_role" "lambda_iam_role" {
-  name = "{{inputs.lambda_role}}"
+  name = "{{inputs.arn_lambda_role}}"
 
   assume_role_policy = <<EOF
 {
@@ -14,7 +14,7 @@ resource "aws_iam_role" "lambda_iam_role" {
       "Sid": ""
     },
     {
-        "Action": ["glue:StartWorkflowRun", "glue:PutWorkflowRunProperties"],
+        "Action": ["rds:StartExportTask"],
         "Effect": "Allow",
         "Resource: "*"
     }
@@ -25,9 +25,9 @@ EOF
 
 
 # Para o deploy funcionar, gerar um arquivo .zip do arquivo main.py com o nome lambda_function.zip
-resource "aws_lambda_function" "lambda_start_workflow" {
+resource "aws_lambda_function" "lambda_export_snapshot" {
   filename      = "lambda_function.zip"
-  function_name = "lambda_start_workflow"
+  function_name = "lambda_export_snapshot"
   role          = aws_iam_role.lambda_iam_role.arn
   handler       = "main.lambda_handler"
 
@@ -37,8 +37,10 @@ resource "aws_lambda_function" "lambda_start_workflow" {
 
   environment {
     variables = {
-      WORKFLOW_NAME = {{inputs.workflow_name}}
-      DIC_BUCKETS_DBS = {"bucket/snapshots/teste/":"DatabseGlue"} // Dicionario com os nomes dos buckets e Databases do Glue
+      SUFIXO_SNAPSHOT = // Sufixo do snapshot a ser utilizado
+      DBS_SNAPSHOTS = // Dicionario com os nomes dos databases e snapshots
+      ROOT_BUCKET_DBS_SNAPSHOTS =  // Pasta raíz (bucket key prefix) dentro do bucket para exportar  o snapshot
+      IAM_ROLE_S3_ARN = // ARN da Role IAM com permissão de escrita no bucket S3
     }
   }
 }
